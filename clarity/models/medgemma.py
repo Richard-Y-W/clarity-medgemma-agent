@@ -39,9 +39,14 @@ class MedGemmaModel:
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=False,
+            temperature=None,
             eos_token_id=self.tokenizer.eos_token_id,
             pad_token_id=self.tokenizer.eos_token_id,
         )
+
         decoded = self.tokenizer.decode(out[0], skip_special_tokens=True)
-        return decoded
+        if decoded.startswith(text):
+            return decoded[len(text):].strip()
+        return decoded.strip()
+
 
