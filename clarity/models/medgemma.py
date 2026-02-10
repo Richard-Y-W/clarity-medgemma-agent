@@ -26,7 +26,15 @@ class MedGemmaModel:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
 
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        # Chat-format input (important for instruction-tuned Gemma/MedGemma variants)
+        messages = [{"role": "user", "content": prompt}]
+        text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
+        inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
         out = self.model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
@@ -34,4 +42,6 @@ class MedGemmaModel:
             eos_token_id=self.tokenizer.eos_token_id,
             pad_token_id=self.tokenizer.eos_token_id,
         )
-        return self.tokenizer.decode(out[0], skip_special_tokens=True)
+        decoded = self.tokenizer.decode(out[0], skip_special_tokens=True)
+        return decoded
+
