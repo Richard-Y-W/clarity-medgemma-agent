@@ -28,25 +28,30 @@ class MedGemmaModel:
 
         # Chat-format input (important for instruction-tuned Gemma/MedGemma variants)
         messages = [{"role": "user", "content": prompt}]
+
         text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True,
+            add_generation_prompt=True
         )
 
         inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+
         out = self.model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=False,
-            temperature=None,
             eos_token_id=self.tokenizer.eos_token_id,
             pad_token_id=self.tokenizer.eos_token_id,
         )
 
         decoded = self.tokenizer.decode(out[0], skip_special_tokens=True)
+
+        # Return completion only (remove the chat-formatted prompt prefix)
         if decoded.startswith(text):
-            return decoded[len(text):].strip()
+            decoded = decoded[len(text):]
+
         return decoded.strip()
+
 
 
