@@ -1,0 +1,8 @@
+[project]
+name = "clarity"
+version = "0.1.0"
+description = "CLARITY: Clinician-facing agentic workflow using MedGemma"
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["."]
