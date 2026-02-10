@@ -4,6 +4,9 @@ from clarity.agents.risk_agent import RiskAgent
 from clarity.eval.metrics import evaluate_escalation
 from clarity.models.medgemma import MedGemmaModel
 from clarity.agents.synth_agent import SynthesisAgent
+from clarity.config import model_id
+
+
 
 
 
@@ -38,7 +41,7 @@ def main():
         print(f"{k}: {v}")
 
         # MedGemma (placeholder) synthesis demo on first case
-    model = MedGemmaModel(model_id="MEDGEMMA_TBD")
+    model = MedGemmaModel(model_id=model_id)
     model.load()
     synth = SynthesisAgent(model)
 
