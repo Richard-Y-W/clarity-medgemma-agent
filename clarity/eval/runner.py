@@ -1,6 +1,7 @@
 from clarity.eval.io import read_jsonl
 from clarity.schemas import PatientState
 from clarity.agents.risk_agent import RiskAgent
+from clarity.eval.metrics import evaluate_escalation
 
 
 def main():
@@ -9,6 +10,9 @@ def main():
     print(f"Loaded {len(cases)} eval cases from {path}")
 
     agent = RiskAgent()
+
+    predictions = []
+    ground_truth = []
 
     for c in cases:
         state = PatientState(
@@ -21,17 +25,16 @@ def main():
             sex=c.get("sex"),
         )
         pred = agent.estimate_risk(state)
+        predictions.append(pred)
+        ground_truth.append(c["ground_truth"])
 
-        gt = c["ground_truth"]
-        gt_escalate = bool(gt["escalate"])
+    metrics = evaluate_escalation(predictions, ground_truth)
 
-        print("\n---")
-        print("case_id:", c["case_id"])
-        print("pred escalate:", pred.escalate, "pred risk:", pred.risk_score)
-        print("gt escalate:", gt_escalate)
-        print("pred red_flags:", pred.red_flags)
-        print("pred rationale:", pred.rationale)
+    print("\n=== Baseline RiskAgent metrics ===")
+    for k, v in metrics.items():
+        print(f"{k}: {v}")
 
 
 if __name__ == "__main__":
     main()
+
