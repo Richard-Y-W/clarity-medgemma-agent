@@ -79,11 +79,11 @@ Write a SOAP note ONLY using the information provided below.
 If something is missing, write "UNKNOWN" (do NOT invent details).
 
 CASE:
-Presenting complaint: {state.presenting_complaint}
-HPI: {state.history_of_present_illness}
-Vitals: {state.vitals}
-Meds: {state.medications}
-Allergies: {state.allergies}
+Presenting complaint: 
+HPI: 
+Vitals: 
+Meds: 
+Allergies: 
 
 OUTPUT FORMAT (exactly):
 SUBJECTIVE: <1-3 sentences>
@@ -107,11 +107,11 @@ CASE:
 Fix it.
 
 CASE:
-Presenting complaint: {state.presenting_complaint}
-HPI: {state.history_of_present_illness}
-Vitals: {state.vitals}
-Meds: {state.medications}
-Allergies: {state.allergies}
+Presenting complaint: 
+HPI: 
+Vitals: 
+Meds: 
+Allergies: 
 
 OUTPUT FORMAT (exactly):
 SUBJECTIVE: <1-3 sentences>
