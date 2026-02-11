@@ -74,13 +74,22 @@ class SynthesisAgent:
     def _build_prompt(self, case_text: str) -> str:
         # NOTE: We intentionally do NOT include "SUBJECTIVE: ..." placeholders.
         # We tell the model to output headers only, with real content.
-        return f"""You are a clinician writing a real SOAP note for the case below.
+        return f"""You are a clinical documentation assistant.
+Write a SOAP note ONLY using the information provided below.
+If something is missing, write "UNKNOWN" (do NOT invent details).
 
-Output EXACTLY four sections, each starting with the header on its own line:
-SUBJECTIVE:
-OBJECTIVE:
-ASSESSMENT:
-PLAN:
+CASE:
+Presenting complaint: {state.presenting_complaint}
+HPI: {state.history_of_present_illness}
+Vitals: {state.vitals}
+Meds: {state.medications}
+Allergies: {state.allergies}
+
+OUTPUT FORMAT (exactly):
+SUBJECTIVE: <1-3 sentences>
+OBJECTIVE: <1-3 sentences>
+ASSESSMENT: <1-3 sentences>
+PLAN: <1-4 bullet points prefixed with "- ">
 
 Rules:
 - Do NOT use "..." or placeholders.
@@ -97,15 +106,22 @@ CASE:
         return f"""You previously returned an invalid SOAP note (it contained placeholders like "..." or missing content).
 Fix it.
 
-Output EXACTLY four sections, each starting with the header on its own line:
-SUBJECTIVE:
-OBJECTIVE:
-ASSESSMENT:
-PLAN:
+CASE:
+Presenting complaint: {state.presenting_complaint}
+HPI: {state.history_of_present_illness}
+Vitals: {state.vitals}
+Meds: {state.medications}
+Allergies: {state.allergies}
+
+OUTPUT FORMAT (exactly):
+SUBJECTIVE: <1-3 sentences>
+OBJECTIVE: <1-3 sentences>
+ASSESSMENT: <1-3 sentences>
+PLAN: <1-4 bullet points prefixed with "- ">
 
 Hard rules:
 - No placeholders (no "...", no "TBD", no "N/A").
-- Use only information from the case. If uncertain, ask for missing details/tests.
+- Use only information from the case. If uncertain, write "UNKNOWN" (do not ask questions).
 - Each section <= {self.cfg.max_sentences_per_section} sentences.
 
 CASE:
