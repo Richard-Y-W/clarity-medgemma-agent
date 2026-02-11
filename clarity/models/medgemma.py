@@ -28,6 +28,11 @@ class MedGemmaModel:
         token = os.environ.get(self.hf_token_env)
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, token=token)
+        print("tokenizer pad_token_id:", self.tokenizer.pad_token_id)
+        print("tokenizer eos_token_id:", self.tokenizer.eos_token_id)
+        print("tokenizer pad_token:", self.tokenizer.pad_token)
+        print("tokenizer eos_token:", self.tokenizer.eos_token)
+
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
             token=token,
@@ -35,22 +40,31 @@ class MedGemmaModel:
             device_map="auto",
         )
 
+        print("model config pad_token_id:", getattr(self.model.config, "pad_token_id", None))
+        print("model config eos_token_id:", getattr(self.model.config, "eos_token_id", None))
+
+
     def generate(self, prompt: str, max_new_tokens: int = 256) -> str:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
 
+        # Build chat formatted input
         messages = [{"role": "user", "content": prompt}]
         text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True
+            add_generation_prompt=True,
         )
 
-        enc = self.tokenizer(text, return_tensors="pt")
+        enc = self.tokenizer(text, return_tensors="pt", padding=False)
         input_ids = enc["input_ids"].to(self.model.device)
         attention_mask = enc.get("attention_mask", None)
         if attention_mask is not None:
             attention_mask = attention_mask.to(self.model.device)
+
+        # Ensure pad token is defined (but DO NOT pass pad_token_id into generate)
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
         out = self.model.generate(
             input_ids=input_ids,
@@ -58,28 +72,11 @@ class MedGemmaModel:
             max_new_tokens=max_new_tokens,
             do_sample=False,
             eos_token_id=self.tokenizer.eos_token_id,
-            pad_token_id=self.tokenizer.eos_token_id,
         )
-        # ===== DEBUG START =====
-        print("\n===== DEBUG: TOKEN INFO =====")
-        print("Input tokens:", input_ids.shape)
-        print("Output tokens:", out.shape)
 
-        print("\n===== DEBUG: FULL DECODE =====")
-        full_decoded = self.tokenizer.decode(out[0], skip_special_tokens=False)
-        print(full_decoded)
-
-        print("\n===== DEBUG: NEW TOKENS ONLY =====")
         gen_ids = out[0, input_ids.shape[-1]:]
-        print("New token count:", gen_ids.shape)
-        print(self.tokenizer.decode(gen_ids, skip_special_tokens=False))
-        print("===== END DEBUG =====\n")
-        # ===== DEBUG END =====
+        decoded = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+        return decoded
 
-
-        # ✅ decode only the newly generated tokens
-        gen_ids = out[0, input_ids.shape[-1]:]
-        decoded = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
-        return decoded.strip()
 
 
