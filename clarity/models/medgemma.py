@@ -60,6 +60,22 @@ class MedGemmaModel:
             eos_token_id=self.tokenizer.eos_token_id,
             pad_token_id=self.tokenizer.eos_token_id,
         )
+        # ===== DEBUG START =====
+        print("\n===== DEBUG: TOKEN INFO =====")
+        print("Input tokens:", input_ids.shape)
+        print("Output tokens:", out.shape)
+
+        print("\n===== DEBUG: FULL DECODE =====")
+        full_decoded = self.tokenizer.decode(out[0], skip_special_tokens=False)
+        print(full_decoded)
+
+        print("\n===== DEBUG: NEW TOKENS ONLY =====")
+        gen_ids = out[0, input_ids.shape[-1]:]
+        print("New token count:", gen_ids.shape)
+        print(self.tokenizer.decode(gen_ids, skip_special_tokens=False))
+        print("===== END DEBUG =====\n")
+        # ===== DEBUG END =====
+
 
         # ✅ decode only the newly generated tokens
         gen_ids = out[0, input_ids.shape[-1]:]
