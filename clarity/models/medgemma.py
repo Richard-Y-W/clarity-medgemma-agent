@@ -1,19 +1,32 @@
-from typing import Optional
+from __future__ import annotations
+
 import os
+from dataclasses import dataclass
+from typing import Optional, List, Dict
+
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerBase, PreTrainedModel
 
 
+@dataclass
 class MedGemmaModel:
-    def __init__(self, model_id: str, hf_token_env: str = "HF_TOKEN", device: Optional[str] = None):
-        self.model_id = model_id
-        self.hf_token_env = hf_token_env
-        self.device = device
-        self.tokenizer = None
-        self.model = None
+    """
+    Thin wrapper around a HuggingFace MedGemma/Gemma instruction-tuned model.
 
-    def load(self):
+    Key behavior:
+    - Uses chat-template formatting (apply_chat_template) for best instruction-following.
+    - Decodes ONLY newly-generated tokens (token-slicing), avoiding prompt-echo issues.
+    """
+    model_id: str
+    hf_token_env: str = "HF_TOKEN"
+    device: Optional[str] = None  # reserved; using device_map="auto" by default
+
+    tokenizer: Optional[PreTrainedTokenizerBase] = None
+    model: Optional[PreTrainedModel] = None
+
+    def load(self) -> None:
         token = os.environ.get(self.hf_token_env)
+
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, token=token)
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
@@ -26,32 +39,25 @@ class MedGemmaModel:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
 
-        # Chat-format input (important for instruction-tuned Gemma/MedGemma variants)
-        messages = [{"role": "user", "content": prompt}]
+        messages: List[Dict[str, str]] = [{"role": "user", "content": prompt}]
 
-        text = self.tokenizer.apply_chat_template(
+        # Build input_ids directly so we can slice off the prompt reliably by token offset
+        input_ids = self.tokenizer.apply_chat_template(
             messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt",
+        ).to(self.model.device)
 
-        inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                input_ids=input_ids,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                eos_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
 
-        out = self.model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            eos_token_id=self.tokenizer.eos_token_id,
-            pad_token_id=self.tokenizer.eos_token_id,
-        )
-
-        decoded = self.tokenizer.decode(out[0], skip_special_tokens=True)
-
-        # Return completion only (remove the chat-formatted prompt prefix)
-        if decoded.startswith(text):
-            decoded = decoded[len(text):]
-
-        return decoded.strip()
-
-
-
+        # Decode only the newly generated tokens (prevents prompt echo)
+        gen_ids = output_ids[0, input_ids.shape[-1]:]
+        return self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
