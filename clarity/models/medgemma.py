@@ -40,35 +40,30 @@ class MedGemmaModel:
             raise RuntimeError("Model not loaded. Call load() first.")
 
         messages = [{"role": "user", "content": prompt}]
-
-        # Build chat text then tokenize to get attention_mask reliably
         text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True,
+            add_generation_prompt=True
         )
 
-        enc = self.tokenizer(
-            text,
-            return_tensors="pt",
-            add_special_tokens=False,
-        ).to(self.model.device)
+        enc = self.tokenizer(text, return_tensors="pt")
+        input_ids = enc["input_ids"].to(self.model.device)
+        attention_mask = enc.get("attention_mask", None)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(self.model.device)
 
-    # Ensure attention_mask exists (it will, but be defensive)
-        if "attention_mask" not in enc:
-            enc["attention_mask"] = torch.ones_like(enc["input_ids"])
+        out = self.model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            eos_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
 
-        with torch.no_grad():
-            out = self.model.generate(
-                **enc,
-                max_new_tokens=max_new_tokens,
-                min_new_tokens=32,              # prevents empty generations
-                do_sample=False,
-                eos_token_id=self.tokenizer.eos_token_id,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
+        # ✅ decode only the newly generated tokens
+        gen_ids = out[0, input_ids.shape[-1]:]
+        decoded = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+        return decoded.strip()
 
-    # Decode only the newly generated tokens (no fragile string slicing)
-        gen_ids = out[0, enc["input_ids"].shape[-1]:]
-        return self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
