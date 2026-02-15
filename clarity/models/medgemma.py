@@ -55,6 +55,10 @@ class MedGemmaModel:
 
             with torch.no_grad():
                 out = self.model.generate(
+                    first_new = out[0, input_ids.shape[-1]: input_ids.shape[-1] + 8].tolist()
+                    print("DEBUG first new ids:", first_new)
+                    print("DEBUG first new toks:", self.tokenizer.convert_ids_to_tokens(first_new))
+
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=max_new_tokens,
