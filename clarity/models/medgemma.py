@@ -55,17 +55,19 @@ class MedGemmaModel:
 
             with torch.no_grad():
                 out = self.model.generate(
-                    first_new = out[0, input_ids.shape[-1]: input_ids.shape[-1] + 8].tolist()
-                    print("DEBUG first new ids:", first_new)
-                    print("DEBUG first new toks:", self.tokenizer.convert_ids_to_tokens(first_new))
-
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                    eos_token_id=self.tokenizer.eos_token_id,  # EOS only
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.9,
+                    eos_token_id=None,  # EOS only
                     pad_token_id=self.tokenizer.eos_token_id,  # pad with EOS to avoid <pad> spam
                 )
+
+                first_new = out[0, input_ids.shape[-1]: input_ids.shape[-1] + 8].tolist()
+                print("DEBUG first new ids:", first_new)
+                print("DEBUG first new toks:", self.tokenizer.convert_ids_to_tokens(first_new))
 
             gen_ids = out[0, input_ids.shape[-1]:]
             return self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
