@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, BitsAndBytesConfig
 
 
 @dataclass
@@ -29,10 +29,17 @@ class MedGemmaModel:
                 raise RuntimeError("Tokenizer has no pad_token_id and no eos_token; cannot set padding safely.")
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        bnb = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.float16,
+        )
+
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
             token=token,
-            torch_dtype=torch.float16,
+            quantization_config=bnb,
             device_map="auto",
         )
         self.model.eval()
