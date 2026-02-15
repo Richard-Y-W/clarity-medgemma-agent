@@ -48,9 +48,13 @@ class MedGemmaModel:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
 
-        pad_id = self.tokenizer.pad_token_id        # should be 0
-        eos_id = self.tokenizer.eos_token_id        # should be 1
-        eot_id = self.tokenizer.convert_tokens_to_ids("<end_of_turn>")  # should be 106
+        pad_id = self.tokenizer.pad_token_id  # usually 0
+        eos_id = self.tokenizer.eos_token_id  # usually 1
+
+        # Some tokenizers may not have <end_of_turn>; guard it.
+        eot_id = self.tokenizer.convert_tokens_to_ids("<end_of_turn>")
+        if eot_id is None or eot_id < 0:
+            eot_id = eos_id
 
         def run(text: str) -> str:
             enc = self.tokenizer(text, return_tensors="pt")
@@ -61,40 +65,45 @@ class MedGemmaModel:
                 out = self.model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    max_new_tokens=max_new_tokens,
 
-                    # IMPORTANT: sample a bit so it doesn't insta-stop into EOS/pad
+                    max_new_tokens=max_new_tokens,
+                    min_new_tokens=min(16, max_new_tokens),  # don't exceed max
+
+                # sampling to avoid greedy choosing special tokens
                     do_sample=True,
                     temperature=0.7,
                     top_p=0.9,
 
-                    # IMPORTANT: stop on eos OR end_of_turn
+                # stop on eos OR end_of_turn
                     eos_token_id=[eos_id, eot_id],
 
-                    # IMPORTANT: pad token is real pad (0), but forbid generating it
-                    pad_token_id=pad_id,
-                    bad_words_ids=[[pad_id]],
+                # IMPORTANT: if padding is needed, pad with EOS (not <pad>)
+                    pad_token_id=eos_id,
 
-                    # helps prevent immediate termination
-                    min_new_tokens=16,
+                # IMPORTANT: forbid generating <pad>
+                    bad_words_ids=[[pad_id]] if pad_id is not None else None,
                 )
 
             gen_ids = out[0, input_ids.shape[-1]:]
 
-            # DEBUG: see if it's still trying to output special tokens
-            print("DEBUG first new ids:", gen_ids[:12].tolist())
-            print("DEBUG first new toks:", self.tokenizer.convert_ids_to_tokens(gen_ids[:12].tolist()))
+        # DEBUG: see what's being generated
+            first = gen_ids[:12].tolist()
+            print("DEBUG first new ids:", first)
+            print("DEBUG first new toks:", self.tokenizer.convert_ids_to_tokens(first))
             print("DEBUG raw decode:", repr(self.tokenizer.decode(gen_ids, skip_special_tokens=False)))
 
-            decoded = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-            return decoded
+            return self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
-        # 1) Try chat template
+    # 1) Try chat-template prompt
         messages = [{"role": "user", "content": prompt}]
-        chat_text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        chat_text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
         decoded = run(chat_text)
 
-    # 2) Fallback: plain prompt
+    # 2) Fallback: raw prompt (if chat formatting causes short-circuit)
         if not decoded:
             decoded = run(prompt)
 
