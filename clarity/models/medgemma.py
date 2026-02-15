@@ -28,27 +28,22 @@ class MedGemmaModel:
         token = os.environ.get(self.hf_token_env)
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, token=token)
-        if self.tokenizer.pad_token_id is None:
-        # many gemma tokenizers already have "<pad>" but sometimes it isn't set
-            if "<pad>" in self.tokenizer.get_vocab():
-                self.tokenizer.pad_token = "<pad>"
-            else:
-                self.tokenizer.add_special_tokens({"pad_token": "<pad>"})
 
-                self.model = AutoModelForCausalLM.from_pretrained(
+    # MedGemma already has pad/eos; do NOT add tokens (avoids resize OOM)
+        if self.tokenizer.pad_token_id is None:
+            # safest fallback: reuse eos as pad (no vocab resize)
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
             token=token,
             torch_dtype=torch.float16,
             device_map="auto",
         )
-        self.model.eval()
 
-        # For generation, it's usually safest for Gemma-family to pad with EOS
-        # (prevents long runs of <pad> dominating the decode)
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
+    # Ensure config knows pad token (no resizing)
         self.model.config.pad_token_id = self.tokenizer.pad_token_id
+
 
 
 
