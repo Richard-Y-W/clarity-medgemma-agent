@@ -42,6 +42,8 @@ class MedGemmaModel:
             device_map="auto",
         )
 
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id  # 0
+
         # If we added tokens, resize embeddings
         if len(self.tokenizer) != self.model.get_input_embeddings().weight.shape[0]:
             self.model.resize_token_embeddings(len(self.tokenizer))
@@ -61,29 +63,22 @@ class MedGemmaModel:
 
         enc = self.tokenizer(text, return_tensors="pt")
         input_ids = enc["input_ids"].to(self.model.device)
-        attention_mask = enc.get("attention_mask", None)
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(self.model.device)
-
-        # Prefer stopping on <end_of_turn> if it exists
-        eot_id = self.tokenizer.convert_tokens_to_ids("<end_of_turn>")
-        eos_ids = [self.tokenizer.eos_token_id]
-        if isinstance(eot_id, int) and eot_id != -1 and eot_id not in eos_ids:
-            eos_ids.append(eot_id)
+        attention_mask = enc["attention_mask"].to(self.model.device)
 
         out = self.model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
-            min_new_tokens=32,              # ✅ prevents “immediate stop”
+            min_new_tokens=32,                 # prevents immediate termination
             do_sample=False,
-            eos_token_id=eos_ids,           # ✅ stop tokens
-            pad_token_id=self.tokenizer.pad_token_id,  # ✅ real pad token
+            eos_token_id=[self.tokenizer.eos_token_id, self.tokenizer.convert_tokens_to_ids("<end_of_turn>")],
+            pad_token_id=self.tokenizer.pad_token_id,
         )
 
-        gen_ids = out[0, input_ids.shape[-1]:]
+        gen_ids = out[0, input_ids.shape[-1]:]  # ✅ only new tokens
         decoded = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
         return decoded
+
 
 
 
