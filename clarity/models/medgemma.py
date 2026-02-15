@@ -35,49 +35,64 @@ class MedGemmaModel:
             else:
                 self.tokenizer.add_special_tokens({"pad_token": "<pad>"})
 
-        self.model = AutoModelForCausalLM.from_pretrained(
+                self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
             token=token,
             torch_dtype=torch.float16,
             device_map="auto",
         )
+        self.model.eval()
 
-        self.model.config.pad_token_id = self.tokenizer.pad_token_id  # 0
+        # For generation, it's usually safest for Gemma-family to pad with EOS
+        # (prevents long runs of <pad> dominating the decode)
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # If we added tokens, resize embeddings
-        if len(self.tokenizer) != self.model.get_input_embeddings().weight.shape[0]:
-            self.model.resize_token_embeddings(len(self.tokenizer))
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
+
+
 
 
   
 
 
-    def generate(self, prompt: str, max_new_tokens: int = 256) -> str:
-        if self.model is None or self.tokenizer is None:
-            raise RuntimeError("Model not loaded. Call load() first.")
+        def generate(self, prompt: str, max_new_tokens: int = 256) -> str:
+            if self.model is None or self.tokenizer is None:
+                raise RuntimeError("Model not loaded. Call load() first.")
 
-        messages = [{"role": "user", "content": prompt}]
-        text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+            def run(text: str) -> str:
+                enc = self.tokenizer(text, return_tensors="pt")
+                input_ids = enc["input_ids"].to(self.model.device)
+                attention_mask = enc.get("attention_mask", torch.ones_like(input_ids)).to(self.model.device)
 
-        enc = self.tokenizer(text, return_tensors="pt")
-        input_ids = enc["input_ids"].to(self.model.device)
-        attention_mask = enc["attention_mask"].to(self.model.device)
+                with torch.no_grad():
+                    out = self.model.generate(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=max_new_tokens,
+                        do_sample=False,
+                        eos_token_id=self.tokenizer.eos_token_id,       # ✅ EOS only
+                        pad_token_id=self.tokenizer.eos_token_id,       # ✅ pad with EOS to avoid <pad> spam
+                    )
 
-        out = self.model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=max_new_tokens,
-            min_new_tokens=32,                 # prevents immediate termination
-            do_sample=False,
-            eos_token_id=[self.tokenizer.eos_token_id, self.tokenizer.convert_tokens_to_ids("<end_of_turn>")],
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
+                gen_ids = out[0, input_ids.shape[-1]:]
+                # If the model immediately ended, this can be mostly EOS/pad.
+                decoded = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+                return decoded
 
-        gen_ids = out[0, input_ids.shape[-1]:]  # ✅ only new tokens
-        decoded = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-        return decoded
+        # 1) Try chat template (good for instruction-tuned)
+            messages = [{"role": "user", "content": prompt}]
+            chat_text = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            decoded = run(chat_text)
+
+            # 2) Fallback: plain prompt (bypasses chat formatting if model short-circuits)
+            if not decoded:
+                decoded = run(prompt)
+
+            return decoded
+
 
 
 
