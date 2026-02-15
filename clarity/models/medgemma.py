@@ -50,6 +50,18 @@ class MedGemmaModel:
             if getattr(self.model.generation_config, "max_length", None) is not None:
                 if int(self.model.generation_config.max_length) < 256:
                     self.model.generation_config.max_length = 2048
+        # --- CRITICAL: kill tiny shipped defaults that clamp generation ---
+        gc = getattr(self.model, "generation_config", None)
+        if gc is not None:
+    # Some repos ship max_length=20, which prevents any real generation.
+            gc.max_length = 4096
+    # Avoid any forced minimums that can behave oddly.
+            gc.min_length = 0
+    # Make sure pad is sane (use eos to avoid <pad>-only outputs)
+            if self.tokenizer.eos_token_id is not None:
+                gc.pad_token_id = int(self.tokenizer.eos_token_id)
+                gc.eos_token_id = int(self.tokenizer.eos_token_id)
+
 
     def _encode(self, text: str) -> dict:
         assert self.tokenizer is not None
