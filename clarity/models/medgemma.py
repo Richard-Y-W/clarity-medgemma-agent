@@ -86,9 +86,9 @@ class MedGemmaModel:
         pad_id = tok.pad_token_id
 
         if eos_id is None:
-            raise RuntimeError("Tokenizer eos_token_id is None; cannot stop reliably.")
+            raise RuntimeError("Tokenizer eos_token_id is None")
 
-        # 1) Build chat text if possible (fallback to raw prompt)
+        # ---- Build chat prompt (fallback to raw) ----
         try:
             chat_text = tok.apply_chat_template(
                 [{"role": "user", "content": prompt}],
@@ -100,39 +100,43 @@ class MedGemmaModel:
         except Exception:
             chat_text = prompt
 
-        # 2) CRITICAL: add_special_tokens=False so tokenizer doesn't append EOS automatically
+    # ---- Encode WITHOUT auto EOS ----
         enc = tok(chat_text, return_tensors="pt", add_special_tokens=False)
         input_ids = enc["input_ids"].to(model.device)
-        attention_mask = enc.get("attention_mask", torch.ones_like(input_ids)).to(model.device)
+        attention_mask = enc.get("attention_mask", None)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(model.device)
 
-        prompt_len = int(input_ids.shape[-1])
+        prompt_len = input_ids.shape[-1]
 
-    # 3) CRITICAL: absolute max_length defeats tiny generation_config.max_length clamps
-        max_len = prompt_len + int(max(1, max_new_tokens))
-
-    # 4) CRITICAL: pad with EOS so early stop doesn't look like <pad>-spam
+    # ---- Force pad = eos so padding can't produce <pad> spam ----
         pad_for_generation = int(eos_id)
 
-    # 5) Prevent generating pad token as content (only if pad != eos)
+    # ---- Prevent model from generating PAD token as content ----
         bad_words = None
-        if pad_id is not None and int(pad_id) != int(eos_id):
+        if pad_id is not None and pad_id != eos_id:
             bad_words = [[int(pad_id)]]
 
+    # ---- CRITICAL: use ONLY max_new_tokens (ignore max_length clamp) ----
         with torch.inference_mode():
             out = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                max_length=max_len,
+
+                max_new_tokens=max(1, int(max_new_tokens)),
+                min_new_tokens=1,
+
                 eos_token_id=int(eos_id),
                 pad_token_id=pad_for_generation,
                 bad_words_ids=bad_words,
+
                 do_sample=False,
             )
 
-    # 6) Return ONLY new tokens
         gen_ids = out[0, prompt_len:]
         decoded = tok.decode(gen_ids, skip_special_tokens=True).strip()
         return decoded
+
 
 
 
