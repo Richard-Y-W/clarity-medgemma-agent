@@ -75,65 +75,65 @@ class MedGemmaModel:
         self,
         prompt: str,
         max_new_tokens: int = 256,
-        min_new_tokens: int = 0,
-        do_sample: bool = False,
-        temperature: float = 0.7,
-        top_p: float = 0.9,
     ) -> str:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
 
-        max_new = int(max(1, max_new_tokens))
-        min_new = int(max(0, min_new_tokens))
-        if min_new > max_new:
-            min_new = 0
+        tok = self.tokenizer
+        model = self.model
 
-        eos_id = self.tokenizer.eos_token_id
-        pad_id = self.tokenizer.pad_token_id
+        eos_id = tok.eos_token_id
+        pad_id = tok.pad_token_id
+
         if eos_id is None:
             raise RuntimeError("Tokenizer eos_token_id is None; cannot stop reliably.")
 
-        # Pad with EOS so early-stop doesn't look like <pad>-spam
+        # 1) Build chat text if possible (fallback to raw prompt)
+        try:
+            chat_text = tok.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            if not isinstance(chat_text, str) or not chat_text.strip():
+                chat_text = prompt
+        except Exception:
+            chat_text = prompt
+
+        # 2) CRITICAL: add_special_tokens=False so tokenizer doesn't append EOS automatically
+        enc = tok(chat_text, return_tensors="pt", add_special_tokens=False)
+        input_ids = enc["input_ids"].to(model.device)
+        attention_mask = enc.get("attention_mask", torch.ones_like(input_ids)).to(model.device)
+
+        prompt_len = int(input_ids.shape[-1])
+
+    # 3) CRITICAL: absolute max_length defeats tiny generation_config.max_length clamps
+        max_len = prompt_len + int(max(1, max_new_tokens))
+
+    # 4) CRITICAL: pad with EOS so early stop doesn't look like <pad>-spam
         pad_for_generation = int(eos_id)
 
-        # Prevent generating pad as a real token when pad != eos
+    # 5) Prevent generating pad token as content (only if pad != eos)
         bad_words = None
         if pad_id is not None and int(pad_id) != int(eos_id):
             bad_words = [[int(pad_id)]]
 
-        def run(text: str) -> str:
-            enc = self._encode(text)
-            input_ids = enc["input_ids"].to(self.model.device)
-            attention_mask = enc.get("attention_mask", torch.ones_like(input_ids)).to(self.model.device)
-            prompt_len = int(input_ids.shape[-1])
+        with torch.inference_mode():
+            out = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_length=max_len,
+                eos_token_id=int(eos_id),
+                pad_token_id=pad_for_generation,
+                bad_words_ids=bad_words,
+                do_sample=False,
+            )
 
-            min_len = prompt_len + min_new
-            max_len = prompt_len + max_new  # absolute max_length defeats tiny generation_config.max_length
+    # 6) Return ONLY new tokens
+        gen_ids = out[0, prompt_len:]
+        decoded = tok.decode(gen_ids, skip_special_tokens=True).strip()
+        return decoded
 
-            with torch.inference_mode():
-                out = self.model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    min_length=min_len,
-                    max_length=max_len,
-                    eos_token_id=int(eos_id),
-                    pad_token_id=pad_for_generation,
-                    bad_words_ids=bad_words,
-                    do_sample=bool(do_sample),
-                    temperature=float(temperature) if do_sample else None,
-                    top_p=float(top_p) if do_sample else None,
-                )
-
-            gen_ids = out[0, prompt_len:]
-            return self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-
-        chat_text = self._build_chat_text(prompt)
-        if chat_text is not None:
-            ans = run(chat_text)
-            if ans:
-                return ans
-
-        return run(prompt)
 
 
 
