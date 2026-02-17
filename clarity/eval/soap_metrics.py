@@ -83,48 +83,38 @@ def concept_recall(pred: str, ref: str) -> float:
     return hit / len(rtoks)
 
 def parse_headers(raw: str) -> Tuple[Dict[str, str], bool]:
-    raw = raw or ""
-
-    # Accept both:
-    #   SUBJECTIVE:
-    #   **SUBJECTIVE:**
-    #   *SUBJECTIVE:**
-    #   SUBJECTIVE
-    # and similar for other sections.
-    patterns = {
-        "SUBJECTIVE": re.compile(r"(?im)^\s*(?:\*{1,2})?\s*SUBJECTIVE\s*:?\s*(?:\*{1,2})?\s*$"),
-        "OBJECTIVE": re.compile(r"(?im)^\s*(?:\*{1,2})?\s*OBJECTIVE\s*:?\s*(?:\*{1,2})?\s*$"),
-        "ASSESSMENT": re.compile(r"(?im)^\s*(?:\*{1,2})?\s*ASSESSMENT\s*:?\s*(?:\*{1,2})?\s*$"),
-        "PLAN": re.compile(r"(?im)^\s*(?:\*{1,2})?\s*PLAN\s*:?\s*(?:\*{1,2})?\s*$"),
-    }
-
-    # Find line start indices for each header
-    hits = {}
-    for key, pat in patterns.items():
-        m = pat.search(raw)
-        if not m:
-            return {}, False
-        hits[key] = m.start()
-
-    # Ensure correct order
-    order = [hits["SUBJECTIVE"], hits["OBJECTIVE"], hits["ASSESSMENT"], hits["PLAN"]]
-    if order != sorted(order):
+    raw = (raw or "").strip()
+    if not raw:
         return {}, False
 
-    # Slice sections
-    keys = ["SUBJECTIVE", "OBJECTIVE", "ASSESSMENT", "PLAN"]
-    sections = {}
-    for i, k in enumerate(keys):
-        start = hits[k]
-        # move start to end of header line
-        header_line_end = raw.find("\n", start)
-        if header_line_end == -1:
-            header_line_end = len(raw)
-        content_start = header_line_end + 1
-        end = hits[keys[i + 1]] if i + 1 < len(keys) else len(raw)
-        sections[k + ":"] = raw[content_start:end].strip()
+    # Inline-safe header extraction: capture content up to next header (or end).
+    def find_section(name: str) -> str | None:
+        pat = re.compile(
+            rf"(?i)(?:^|\s)(?:\*{{1,2}})?\s*{name}\s*:?\s*(?:\*{{1,2}})?\s*"
+            rf"(.*?)(?=(?:\s(?:\*{{1,2}})?\s*(?:SUBJECTIVE|OBJECTIVE|ASSESSMENT|PLAN)\s*:?\s*(?:\*{{1,2}})?\s*)|$)",
+            re.DOTALL,
+        )
+        m = pat.search(raw)
+        if not m:
+            return None
+        return (m.group(1) or "").strip()
 
+    subj = find_section("SUBJECTIVE")
+    obj  = find_section("OBJECTIVE")
+    asmt = find_section("ASSESSMENT")
+    plan = find_section("PLAN")
+
+    if any(x is None for x in (subj, obj, asmt, plan)):
+        return {}, False
+
+    sections = {
+        "SUBJECTIVE:": subj,
+        "OBJECTIVE:": obj,
+        "ASSESSMENT:": asmt,
+        "PLAN:": plan,
+    }
     return sections, True
+
 
 
 def plan_bullets_ok(plan: str) -> bool:
@@ -323,7 +313,7 @@ def evaluate_soap(
 
         rl = rouge_l_f1(pred, ref)
         tf1 = token_f1(pred, ref)
-        cr = concept_recall(pred, ref)
+        cr = concept_recall(ref, pred)
         out[f"rougeL_f1_{key}"] = rl
         out[f"token_f1_{key}"] = tf1
         out[f"concept_recall_{key}"] = cr
