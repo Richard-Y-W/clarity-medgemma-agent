@@ -86,8 +86,9 @@ def run_soap_eval(
                 top_p=decoding.top_p,
             )
 
-            gt = c.get("ground_truth", {}) or {}
-            soap_ref = gt.get("soap_reference", {}) or {}
+            gt = c["ground_truth"]
+            soap_ref = gt["soap_reference"]
+
 
             metrics = evaluate_soap(
                 raw_output=raw,
