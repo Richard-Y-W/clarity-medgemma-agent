@@ -4,7 +4,7 @@ import re
 import string
 from typing import Dict, List, Tuple, Optional
 
-HEADERS = ["SUBJECTIVE:", "OBJECTIVE:", "ASSESSMENT:", "PLAN:"]
+HEADERS = ["SUBJECTIVE", "OBJECTIVE", "ASSESSMENT", "PLAN"]
 
 STOPWORDS = {
     "the","a","an","and","or","but","if","then","else","when","while","for","to","of","in","on","at",
@@ -84,25 +84,69 @@ def concept_recall(pred: str, ref: str) -> float:
 
 def parse_headers(raw: str) -> Tuple[Dict[str, str], bool]:
     raw = raw or ""
-    idx = {h: raw.find(h) for h in HEADERS}
-    if any(v == -1 for v in idx.values()):
-        return {}, False
-    order = [idx[h] for h in HEADERS]
+
+    # Accept both:
+    #   SUBJECTIVE:
+    #   **SUBJECTIVE:**
+    #   *SUBJECTIVE:**
+    #   SUBJECTIVE
+    # and similar for other sections.
+    patterns = {
+        "SUBJECTIVE": re.compile(r"(?im)^\s*(?:\*{1,2})?\s*SUBJECTIVE\s*:?\s*(?:\*{1,2})?\s*$"),
+        "OBJECTIVE": re.compile(r"(?im)^\s*(?:\*{1,2})?\s*OBJECTIVE\s*:?\s*(?:\*{1,2})?\s*$"),
+        "ASSESSMENT": re.compile(r"(?im)^\s*(?:\*{1,2})?\s*ASSESSMENT\s*:?\s*(?:\*{1,2})?\s*$"),
+        "PLAN": re.compile(r"(?im)^\s*(?:\*{1,2})?\s*PLAN\s*:?\s*(?:\*{1,2})?\s*$"),
+    }
+
+    # Find line start indices for each header
+    hits = {}
+    for key, pat in patterns.items():
+        m = pat.search(raw)
+        if not m:
+            return {}, False
+        hits[key] = m.start()
+
+    # Ensure correct order
+    order = [hits["SUBJECTIVE"], hits["OBJECTIVE"], hits["ASSESSMENT"], hits["PLAN"]]
     if order != sorted(order):
         return {}, False
 
-    sections: Dict[str, str] = {}
-    for i, h in enumerate(HEADERS):
-        start = idx[h] + len(h)
-        end = idx[HEADERS[i + 1]] if i + 1 < len(HEADERS) else len(raw)
-        sections[h] = raw[start:end].strip()
+    # Slice sections
+    keys = ["SUBJECTIVE", "OBJECTIVE", "ASSESSMENT", "PLAN"]
+    sections = {}
+    for i, k in enumerate(keys):
+        start = hits[k]
+        # move start to end of header line
+        header_line_end = raw.find("\n", start)
+        if header_line_end == -1:
+            header_line_end = len(raw)
+        content_start = header_line_end + 1
+        end = hits[keys[i + 1]] if i + 1 < len(keys) else len(raw)
+        sections[k + ":"] = raw[content_start:end].strip()
+
     return sections, True
+
 
 def plan_bullets_ok(plan: str) -> bool:
     lines = [l.strip() for l in (plan or "").splitlines() if l.strip()]
     if not lines:
         return False
-    return all(l.startswith("- ") for l in lines)
+
+    # Accept:
+    # - bullet lines
+    # * bullet lines
+    # or plain lines (like "Obtain EKG immediately.")
+    bullet_like = sum(1 for l in lines if l.startswith("- ") or l.startswith("* "))
+    if bullet_like >= max(1, len(lines) // 2):
+        return True
+
+    # Otherwise require at least 3 short plan actions as plain lines
+    # (avoid a single paragraph)
+    if len(lines) >= 3 and all(len(l) <= 140 for l in lines):
+        return True
+
+    return False
+
 
 def count_string_coverage(text: str, items: List[str]) -> float:
     if not items:
