@@ -45,7 +45,9 @@ def run_soap_eval(
 ) -> None:
     # NOTE: your cases file has a UTF-8 BOM, so we must read with utf-8-sig.
     # read_jsonl may or may not handle that; safest is to do it here.
-    cases = list(read_jsonl(cases_path, encoding="utf-8-sig"))
+    with open(cases_path, "r", encoding="utf-8-sig") as fh:
+        cases = [json.loads(line) for line in fh]
+
 
     model = MedGemmaModel(model_id=model_id)
     model.load()
