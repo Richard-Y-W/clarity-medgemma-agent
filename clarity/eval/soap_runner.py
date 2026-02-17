@@ -100,6 +100,16 @@ def run_soap_eval(
                 source_sex=c.get("sex"),
             )
 
+            # Override omission_rate to be consistent with concept recall (macro).
+# This prevents "always 1.0" omission when recall is computed correctly.
+            if "concept_recall_macro" in metrics and metrics["concept_recall_macro"] is not None:
+                try:
+                    cr = float(metrics["concept_recall_macro"])
+                    metrics["omission_rate"] = max(0.0, min(1.0, 1.0 - cr))
+                except Exception:
+                    pass
+
+
             row: Dict[str, Any] = {
                 "case_id": c.get("case_id"),
                 "prompt_variant": prompt_variant,
