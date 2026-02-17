@@ -57,7 +57,6 @@ def run_soap_eval(
         model,
         cfg=SoapGenConfig(
             max_new_tokens=decoding.max_new_tokens,
-            prompt_variant=prompt_variant,  # if SoapGenConfig supports it; harmless otherwise
         ),
     )
 
