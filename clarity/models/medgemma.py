@@ -1,160 +1,180 @@
+# clarity/models/medgemma.py
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, BitsAndBytesConfig
-
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    BitsAndBytesConfig,
+    LogitsProcessor,
+    LogitsProcessorList,
+)
 
 @dataclass
 class MedGemmaModel:
-    model_id: str
+    model_id: str = "google/medgemma-1.5-4b-it"
     hf_token_env: str = "HF_TOKEN"
-    device: Optional[str] = None  # reserved; using device_map="auto"
 
-    tokenizer: Optional[PreTrainedTokenizerBase] = None
-    model: Optional[PreTrainedModel] = None
+    tokenizer: Any = None
+    model: Any = None
 
-    def load(self) -> None:
-        token = os.environ.get(self.hf_token_env)
+    def load(self):
+        token = os.getenv("HF_TOKEN")
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, token=token)
 
-        # DO NOT add tokens / DO NOT resize embeddings.
-        # If pad missing, reuse eos as pad WITHOUT changing vocab size.
-        if self.tokenizer.pad_token_id is None:
-            if self.tokenizer.eos_token is None:
-                raise RuntimeError("Tokenizer has no pad_token_id and no eos_token; cannot set padding safely.")
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        use_4bit = os.getenv("USE_4BIT", "0") == "1"
 
-        bnb = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.float16,
-        )
-
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_id,
+        model_kwargs = dict(
             token=token,
-            quantization_config=bnb,
+            torch_dtype="auto",
             device_map="auto",
         )
+
+        if use_4bit:
+            try:
+                from transformers import BitsAndBytesConfig
+                import bitsandbytes  # noqa: F401
+
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.float16,
+                )
+            except Exception as e:
+                print(f"[WARN] USE_4BIT=1 but bitsandbytes not available; falling back. Reason: {e}")
+
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, **model_kwargs)
         self.model.eval()
 
-        # Ensure config has correct ids
-        self.model.config.pad_token_id = int(self.tokenizer.pad_token_id)
-        if self.tokenizer.eos_token_id is not None:
-            self.model.config.eos_token_id = int(self.tokenizer.eos_token_id)
+        # Make sure model config knows pad token (important for attention masks)
+        if getattr(self.model.config, "pad_token_id", None) is None and self.tokenizer.pad_token_id is not None:
+            self.model.config.pad_token_id = self.tokenizer.pad_token_id
 
-        # Defensive: avoid tiny shipped defaults like max_length=20
-        if getattr(self.model, "generation_config", None) is not None:
-            self.model.generation_config.pad_token_id = int(self.tokenizer.pad_token_id)
-            if self.tokenizer.eos_token_id is not None:
-                self.model.generation_config.eos_token_id = int(self.tokenizer.eos_token_id)
-            if getattr(self.model.generation_config, "max_length", None) is not None:
-                if int(self.model.generation_config.max_length) < 256:
-                    self.model.generation_config.max_length = 2048
-        # --- CRITICAL: kill tiny shipped defaults that clamp generation ---
-        gc = getattr(self.model, "generation_config", None)
-        if gc is not None:
-    # Some repos ship max_length=20, which prevents any real generation.
-            gc.max_length = 4096
-    # Avoid any forced minimums that can behave oddly.
-            gc.min_length = 0
-    # Make sure pad is sane (use eos to avoid <pad>-only outputs)
-            if self.tokenizer.eos_token_id is not None:
-                gc.pad_token_id = int(self.tokenizer.eos_token_id)
-                gc.eos_token_id = int(self.tokenizer.eos_token_id)
-
-
-    def _encode(self, text: str) -> dict:
-        assert self.tokenizer is not None
-        # CRITICAL: don't let tokenizer auto-append EOS (can cause immediate stop)
-        return self.tokenizer(text, return_tensors="pt", add_special_tokens=False)
-
-    def _build_chat_text(self, prompt: str) -> Optional[str]:
-        assert self.tokenizer is not None
+    # ---- prompt helpers ----
+    def _build_prompt(self, prompt: str) -> str:
+        """
+        Prefer chat template. Fallback to raw prompt if template unavailable.
+        """
         try:
-            messages = [{"role": "user", "content": prompt}]
+            # MedGemma IT expects chat format + generation prompt
             chat_text = self.tokenizer.apply_chat_template(
-                messages,
+                [{"role": "user", "content": prompt}],
                 tokenize=False,
                 add_generation_prompt=True,
             )
-            if isinstance(chat_text, str) and chat_text.strip():
-                return chat_text
+            return chat_text
+        except Exception:
+            return prompt
+
+    def _eos_ids(self) -> Union[int, List[int]]:
+        eos_id = self.tokenizer.eos_token_id
+        ids: List[int] = [eos_id] if eos_id is not None else []
+        try:
+            eot = self.tokenizer.convert_tokens_to_ids("<end_of_turn>")
+            if eot is not None and eot >= 0 and eot not in ids:
+                ids.append(eot)
         except Exception:
             pass
-        return None
+        if len(ids) == 1:
+            return ids[0]
+        return ids
+
+    # ---- generation ----
+    class _MinNewTokens(LogitsProcessor):
+        def __init__(self, min_new: int, eos_ids: Sequence[int], start_len: int):
+            self.min_new = int(min_new)
+            self.eos_ids = set(int(x) for x in eos_ids)
+            self.start_len = int(start_len)
+
+        def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+            # block EOS until we have generated min_new tokens
+            cur_len = input_ids.shape[-1]
+            if (cur_len - self.start_len) < self.min_new:
+                for eid in self.eos_ids:
+                    if 0 <= eid < scores.shape[-1]:
+                        scores[..., eid] = -float("inf")
+            return scores
 
     def generate(
         self,
         prompt: str,
         max_new_tokens: int = 256,
+        min_new_tokens: int = 0,
+        do_sample: bool = False,
+        temperature: float = 0.7,
+        top_p: float = 0.95,
+        debug: bool = False,
     ) -> str:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
 
-        tok = self.tokenizer
-        model = self.model
+        text = self._build_prompt(prompt)
 
-        eos_id = tok.eos_token_id
-        pad_id = tok.pad_token_id
+        # IMPORTANT: for chat_text we used add_special_tokens=False when encoding
+        # to avoid duplicating special tokens (matches your earlier debug)
+        enc = self.tokenizer(
+            text,
+            return_tensors="pt",
+            add_special_tokens=False,
+        )
+        input_ids = enc["input_ids"].to(self.model.device)
+        attention_mask = enc.get("attention_mask", torch.ones_like(input_ids)).to(self.model.device)
 
-        if eos_id is None:
-            raise RuntimeError("Tokenizer eos_token_id is None")
-
-        # ---- Build chat prompt (fallback to raw) ----
-        try:
-            chat_text = tok.apply_chat_template(
-                [{"role": "user", "content": prompt}],
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            if not isinstance(chat_text, str) or not chat_text.strip():
-                chat_text = prompt
-        except Exception:
-            chat_text = prompt
-
-    # ---- Encode WITHOUT auto EOS ----
-        enc = tok(chat_text, return_tensors="pt", add_special_tokens=False)
-        input_ids = enc["input_ids"].to(model.device)
-        attention_mask = enc.get("attention_mask", None)
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(model.device)
+        pad_id = self.tokenizer.pad_token_id
+        eos_ids = self._eos_ids()
+        eos_list = eos_ids if isinstance(eos_ids, list) else [eos_ids]
 
         prompt_len = input_ids.shape[-1]
+        max_length = prompt_len + int(max_new_tokens)
 
-    # ---- Force pad = eos so padding can't produce <pad> spam ----
-        pad_for_generation = int(eos_id)
+        # Forbid PAD token generation explicitly (prevents pad-only streams)
+        bad_words = [[pad_id]] if pad_id is not None else None
 
-    # ---- Prevent model from generating PAD token as content ----
-        bad_words = None
-        if pad_id is not None and pad_id != eos_id:
-            bad_words = [[int(pad_id)]]
+        # Min-new-tokens: block EOS until enough tokens generated
+        lp = LogitsProcessorList()
+        if min_new_tokens and min_new_tokens > 0:
+            lp.append(self._MinNewTokens(min_new_tokens, eos_list, start_len=prompt_len))
 
-    # ---- CRITICAL: use ONLY max_new_tokens (ignore max_length clamp) ----
-        with torch.inference_mode():
-            out = model.generate(
+        if debug:
+            gc = getattr(self.model, "generation_config", None)
+            print("== DEBUG MedGemma.generate ==")
+            print("model_id:", self.model_id)
+            print("device:", next(self.model.parameters()).device, "dtype:", next(self.model.parameters()).dtype)
+            print("pad_id:", pad_id, "eos_ids:", eos_list)
+            print("prompt_len:", prompt_len, "max_length:", max_length)
+            print("gen_config.max_length:", getattr(gc, "max_length", None))
+
+            # forward check
+            with torch.inference_mode(), torch.autocast(device_type="cuda", enabled=False):
+                out = self.model(input_ids=input_ids, attention_mask=attention_mask)
+            finite = torch.isfinite(out.logits).all().item()
+            nan_count = torch.isnan(out.logits).sum().item()
+            print("forward logits finite?", finite, "nan_count", nan_count)
+
+        with torch.inference_mode(), torch.autocast(device_type="cuda", enabled=False):
+            out_ids = self.model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-
-                max_new_tokens=max(1, int(max_new_tokens)),
-                min_new_tokens=1,
-
-                eos_token_id=int(eos_id),
-                pad_token_id=pad_for_generation,
+                max_length=max_length,           # hard clamp (avoids tiny max_length in generation_config)
+                do_sample=do_sample,
+                temperature=temperature if do_sample else None,
+                top_p=top_p if do_sample else None,
+                eos_token_id=eos_list,
+                pad_token_id=(self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else pad_id),
                 bad_words_ids=bad_words,
-
-                do_sample=False,
+                logits_processor=lp if len(lp) else None,
             )
 
-        gen_ids = out[0, prompt_len:]
-        decoded = tok.decode(gen_ids, skip_special_tokens=True).strip()
-        return decoded
+        new_ids = out_ids[0, prompt_len:]
+        text_out = self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+        return text_out
+
 
 
 
