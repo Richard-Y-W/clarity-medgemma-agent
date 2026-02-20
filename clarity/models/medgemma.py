@@ -110,6 +110,7 @@ class MedGemmaModel:
         temperature: float = 0.7,
         top_p: float = 0.95,
         debug: bool = False,
+        **gen_kwargs,
     ) -> str:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
@@ -181,6 +182,7 @@ class MedGemmaModel:
                 # --- NEW knobs ---
                 repetition_penalty=repetition_penalty,
                 no_repeat_ngram_size=no_repeat_ngram_size,
+                **gen_kwargs,
             )   
 
         new_ids = out_ids[0, prompt_len:]
