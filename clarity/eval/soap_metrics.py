@@ -358,15 +358,11 @@ def evaluate_soap(
     nonempty = 0
 
     for h in HEADERS:
-        key = h[:-1].lower()  # subjective/objective/assessment/plan
-        pred = sections.get(h, "")
+        key = h.lower()  # subjective/objective/assessment/plan
+        pred = sections.get(f"{h}:", "")
         ref = (soap_ref or {}).get(key, "")
         if pred.strip():
             nonempty += 1
-        if key == "subjective":
-            print("DEBUG evaluate_soap soap_ref keys =", sorted(list((soap_ref or {}).keys())))
-            print("DEBUG evaluate_soap ref_len(subjective) =", len((ref or "").strip()),
-                "pred_len =", len((pred or "").strip()))
 
 
 
