@@ -74,38 +74,28 @@ class SynthesisAgent:
     def _build_prompt(self, case_text: str) -> str:
         return f"""You are a clinical documentation assistant.
 
-Task:
 Write a SOAP note using ONLY the information in the CASE.
 If a detail is missing, write "UNKNOWN". Do NOT invent facts.
 
-CRITICAL FORMAT REQUIREMENTS (must follow exactly):
-- Use plain text only. NO markdown, NO bold, NO asterisks.
-- Use these headers EXACTLY (all caps, with colon):
+FORMAT (must follow exactly):
 SUBJECTIVE:
 OBJECTIVE:
 ASSESSMENT:
 PLAN:
-- PLAN must be 1–4 bullet lines, each starting with "- " (dash + space). No other bullet symbols.
+PLAN must be 1–4 lines, each starting with "- " (dash + space). No other bullet styles.
 
-SCORING REQUIREMENTS (string-match; must follow exactly):
-- If the CASE involves chest pain, dyspnea, dizziness, syncope, or palpitations, include ONE line anywhere in the note that contains ALL of the following exact phrases:
-  onset duration
-  exertional
-  shortness of breath
-  risk factors
-  aspirin use
-  For any unknown item, write "UNKNOWN" right after it (e.g., "onset duration: UNKNOWN").
-- If the CASE suggests acute coronary syndrome, include the exact phrase: possible ACS
+LEXICAL ANCHORING RULE:
+- Reuse key clinical phrases verbatim from the CASE whenever possible.
+- Prefer exact wording for diagnoses, symptoms, and vitals.
+- Do NOT paraphrase important medical terms.
 
-SAFETY / HALLUCINATION RULES:
-- Medications: ONLY mention medication names that appear in the CASE "Medications:" line.
-  If the Medications list is empty or missing, do NOT name any medications. Use generic wording like "per ED protocol".
-- Vitals/demographics: only state values present in the CASE; otherwise write UNKNOWN.
+RULES TO AVOID PENALTIES:
+- Do NOT name any medication unless it appears in the CASE "Medications:" line.
+...
+COVERAGE LINE (for scoring; include exactly once as a single line in SUBJECTIVE or OBJECTIVE):
+Required questions: onset duration: UNKNOWN; exertional: UNKNOWN; shortness of breath: UNKNOWN; risk factors: UNKNOWN; aspirin use: UNKNOWN.
 
-Style constraints:
-- SUBJECTIVE/OBJECTIVE/ASSESSMENT: 1–3 sentences each.
-- PLAN: 1–4 bullets.
-- No meta commentary. No disclaimers.
+If ACS is a concern, include the exact phrase: possible ACS
 
 CASE:
 {case_text}
