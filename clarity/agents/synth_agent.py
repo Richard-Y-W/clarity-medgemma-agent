@@ -89,10 +89,6 @@ LEXICAL ANCHORING RULE:
 - Prefer exact wording for diagnoses, symptoms, and vitals.
 - Do NOT paraphrase important medical terms.
 
-ASSESSMENT REQUIREMENT:
-- In ASSESSMENT, explicitly restate the primary diagnosis and the key supporting findings using wording from the CASE.
-- Include important symptom terms and vital descriptors verbatim when available.
-
 RULES TO AVOID PENALTIES:
 - Do NOT name any medication unless it appears in the CASE "Medications:" line.
 ...

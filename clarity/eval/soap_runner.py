@@ -120,9 +120,8 @@ def run_soap_eval(
                 prompt,
                 max_new_tokens=decoding.max_new_tokens,
                 min_new_tokens=decoding.min_new_tokens,
-                do_sample=decoding.do_sample,
-                temperature=decoding.temperature,
-                top_p=decoding.top_p,
+                do_sample=False,
+                repetition_penalty=1.05,
             )
 
             raw = _normalize_pred_for_eval(raw)
