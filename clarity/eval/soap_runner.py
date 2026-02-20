@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from clarity.eval.io import read_jsonl
-from clarity.eval.soap_metrics import evaluate_soap
 from clarity.schemas import PatientState
 from clarity.models.medgemma import MedGemmaModel
 from clarity.agents.synth_agent import SynthesisAgent, SoapGenConfig
+from clarity.eval.soap_metrics import evaluate_soap, parse_reference_soap
+
+
 
 
 @dataclass
@@ -36,6 +38,27 @@ def _flatten_soap_reference(soap_ref: Dict[str, Any]) -> str:
     ).strip()
 
 
+import re
+
+def _normalize_pred_for_eval(raw: str) -> str:
+    s = (raw or "").strip()
+
+    # Strip markdown bold markers globally (safe for this task)
+    s = s.replace("**", "")
+
+    # Normalize header lines (any capitalization) to exact expected tokens
+    s = re.sub(r"(?im)^\s*subjective\s*:\s*", "SUBJECTIVE: ", s)
+    s = re.sub(r"(?im)^\s*objective\s*:\s*", "OBJECTIVE: ", s)
+    s = re.sub(r"(?im)^\s*assessment\s*:\s*", "ASSESSMENT: ", s)
+    s = re.sub(r"(?im)^\s*plan\s*:\s*", "PLAN: ", s)
+
+    # Convert common bullets to "- "
+    s = re.sub(r"(?m)^\s*[\*\u2022]\s+", "- ", s)   # "* " or "• "
+    s = re.sub(r"(?m)^\s*\d+\.\s+", "- ", s)        # "1. " -> "- "
+
+    return s.strip()
+
+
 def run_soap_eval(
     cases_path: str,
     model_id: str,
@@ -43,26 +66,34 @@ def run_soap_eval(
     decoding: DecodingConfig,
     out_jsonl: str,
 ) -> None:
-    # NOTE: your cases file has a UTF-8 BOM, so we must read with utf-8-sig.
-    # read_jsonl may or may not handle that; safest is to do it here.
-    with open(cases_path, "r", encoding="utf-8-sig") as fh:
-        cases = [json.loads(line) for line in fh]
+    # --- helpers ---
+    def soap_dict_to_string(d: Dict[str, str]) -> str:
+        """Turn {'subjective':..,'objective':..,'assessment':..,'plan':..} into a canonical reference SOAP string."""
+        return (
+            f"SUBJECTIVE: {d.get('subjective','')}\n"
+            f"OBJECTIVE: {d.get('objective','')}\n"
+            f"ASSESSMENT: {d.get('assessment','')}\n"
+            f"PLAN: {d.get('plan','')}\n"
+        ).strip()
 
+    # NOTE: cases file has UTF-8 BOM → use utf-8-sig
+    with open(cases_path, "r", encoding="utf-8-sig") as fh:
+        cases = [json.loads(line) for line in fh if line.strip()]
 
     model = MedGemmaModel(model_id=model_id)
     model.load()
 
-    # Keep config minimal; decoding knobs are passed to model.generate().
     synth = SynthesisAgent(
         model,
-        cfg=SoapGenConfig(
-            max_new_tokens=decoding.max_new_tokens,
-        ),
+        cfg=SoapGenConfig(max_new_tokens=decoding.max_new_tokens),
     )
 
     rows: List[Dict[str, Any]] = []
     with open(out_jsonl, "w", encoding="utf-8") as f:
         for c in cases:
+            # Always define gt (prevents NameError)
+            gt = c.get("ground_truth") or {}
+
             state = PatientState(
                 presenting_complaint=c["presenting_complaint"],
                 history_of_present_illness=c.get("history_of_present_illness"),
@@ -73,10 +104,18 @@ def run_soap_eval(
                 sex=c.get("sex"),
             )
 
-            # Build prompt using SynthesisAgent formatting + prompt builder.
+            # Build prompt
             case_text = synth._format_case(state)
-            prompt = synth._build_prompt(case_text)
 
+
+            if hasattr(synth, "_build_prompt"):
+                prompt = synth._build_prompt(case_text)
+            elif hasattr(synth, "build_prompt"):
+                prompt = synth.build_prompt(case_text)
+            else:
+                raise RuntimeError("SynthesisAgent has no prompt builder method (expected _build_prompt or build_prompt).")
+            
+            # Generate
             raw = model.generate(
                 prompt,
                 max_new_tokens=decoding.max_new_tokens,
@@ -86,8 +125,38 @@ def run_soap_eval(
                 top_p=decoding.top_p,
             )
 
-            gt = c["ground_truth"]
-            soap_ref = gt["soap_reference"]
+            raw = _normalize_pred_for_eval(raw)
+
+            # --- Reference handling ---
+            # Prefer the explicit string in the cases file:
+            reference_soap_str = (c.get("reference_soap") or "").strip()
+
+            # If missing, fall back to ground_truth.soap_reference dict (if present)
+            if not reference_soap_str:
+                gt_ref_dict = gt.get("soap_reference") or {}
+                if isinstance(gt_ref_dict, dict) and gt_ref_dict:
+                    reference_soap_str = soap_dict_to_string(gt_ref_dict)
+
+            # Parse the reference string into HEADER sections (SUBJECTIVE:/OBJECTIVE:/ASSESSMENT:/PLAN:)
+            ref_sections, ref_ok = parse_reference_soap(reference_soap_str)
+
+            # Map to evaluate_soap() expected dict keys (subjective/objective/assessment/plan)
+            soap_ref = {
+                "subjective": ref_sections.get("SUBJECTIVE:", ""),
+                "objective": ref_sections.get("OBJECTIVE:", ""),
+                "assessment": ref_sections.get("ASSESSMENT:", ""),
+                "plan": ref_sections.get("PLAN:", ""),
+            }
+
+            # Hard fail if reference is unusable (prevents silent all-zeros)
+            if (not ref_ok) or (not any(v.strip() for v in soap_ref.values())):
+                raise RuntimeError(
+                    f"[soap_runner] reference SOAP missing/unparseable for case_id={c.get('case_id')} "
+                    f"ref_ok={ref_ok} ref_len={len(reference_soap_str)}"
+                )
+            
+            print("DEBUG soap_ref lens:",
+                {k: len((soap_ref.get(k,"") or "").strip()) for k in ["subjective","objective","assessment","plan"]})
 
 
             metrics = evaluate_soap(
@@ -101,25 +170,19 @@ def run_soap_eval(
                 source_sex=c.get("sex"),
             )
 
-            # Override omission_rate to be consistent with concept recall (macro).
-# This prevents "always 1.0" omission when recall is computed correctly.
-            if "concept_recall_macro" in metrics and metrics["concept_recall_macro"] is not None:
-                try:
-                    cr = float(metrics["concept_recall_macro"])
-                    metrics["omission_rate"] = max(0.0, min(1.0, 1.0 - cr))
-                except Exception:
-                    pass
-
-
             row: Dict[str, Any] = {
                 "case_id": c.get("case_id"),
                 "prompt_variant": prompt_variant,
                 "model_id": model_id,
                 "decoding": asdict(decoding),
+
                 "raw_output": raw,
 
-                # For debugging + offline analysis:
-                "reference_soap": _flatten_soap_reference(soap_ref),
+                # Debug outputs so your later inspection works:
+                "reference_soap": reference_soap_str,
+                "soap_ref": soap_ref,
+
+                # Keep these for analysis / scoring breakdown:
                 "required_questions": gt.get("required_questions", []),
                 "red_flags": gt.get("red_flags", []),
                 "escalate": gt.get("escalate", False),
@@ -136,11 +199,13 @@ def run_soap_eval(
         "halluc_score",
         "omission_rate",
         "rougeL_f1_macro",
+        "concept_recall_macro",
         "score_composite",
     ]
     print("\n=== SOAP EVAL SUMMARY ===")
     for k in keys:
-        vals = [r[k] for r in rows if k in r]
+        vals = [r[k] for r in rows if (k in r and isinstance(r[k], (int, float)))]
         if vals:
             print(f"{k}: mean={sum(vals)/len(vals):.3f}  n={len(vals)}")
+
 

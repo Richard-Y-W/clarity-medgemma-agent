@@ -12,7 +12,11 @@ STOPWORDS = {
     "patient","pt","reports","report","denies","no","yes"
 }
 
-_PLACEHOLDER_RE = re.compile(r"(\.\.\.|tbd|n/?a)", re.IGNORECASE)
+_PLACEHOLDER_RE = re.compile(
+    r"\b(TBD|TO\s*DO|PLACEHOLDER|XXX|<[^>]+>)\b",
+    re.IGNORECASE,
+)
+
 
 VITAL_PATTERNS = [
     (re.compile(r"\bbp\s*[:=]?\s*(\d{2,3})\s*/\s*(\d{2,3})\b", re.IGNORECASE), "BP"),
@@ -82,17 +86,20 @@ def concept_recall(pred: str, ref: str) -> float:
     hit = sum(1 for t in rtoks if t in ptoks)
     return hit / len(rtoks)
 
+
 def parse_headers(raw: str) -> Tuple[Dict[str, str], bool]:
     raw = (raw or "").strip()
     if not raw:
         return {}, False
 
-    # Inline-safe header extraction: capture content up to next header (or end).
+    # Capture section content up to the next header (or end),
+    # allowing headers to appear inline and with markdown like **SUBJECTIVE:**
     def find_section(name: str) -> str | None:
         pat = re.compile(
-            rf"(?i)(?:^|\s)(?:\*{{1,2}})?\s*{name}\s*:?\s*(?:\*{{1,2}})?\s*"
-            rf"(.*?)(?=(?:\s(?:\*{{1,2}})?\s*(?:SUBJECTIVE|OBJECTIVE|ASSESSMENT|PLAN)\s*:?\s*(?:\*{{1,2}})?\s*)|$)",
-            re.DOTALL,
+            rf"(?is)"
+            rf"(?:^|\s)(?:\*{{1,2}})?\s*{name}\s*:?\s*(?:\*{{1,2}})?\s*"
+            rf"(.*?)"
+            rf"(?=(?:\s(?:\*{{1,2}})?\s*(?:SUBJECTIVE|OBJECTIVE|ASSESSMENT|PLAN)\s*:?\s*(?:\*{{1,2}})?\s*)|$)"
         )
         m = pat.search(raw)
         if not m:
@@ -107,35 +114,81 @@ def parse_headers(raw: str) -> Tuple[Dict[str, str], bool]:
     if any(x is None for x in (subj, obj, asmt, plan)):
         return {}, False
 
-    sections = {
+    return {
         "SUBJECTIVE:": subj,
         "OBJECTIVE:": obj,
         "ASSESSMENT:": asmt,
         "PLAN:": plan,
-    }
-    return sections, True
+    }, True
+
+
+
+def parse_reference_soap(raw: str) -> Tuple[Dict[str, str], bool]:
+    """
+    Parse a reference SOAP that might be:
+      - multi-line with proper headers
+      - one-line with inline headers
+      - shorthand S:/O:/A:/P:
+    Returns (sections, ok) where sections keys match HEADERS exactly:
+      "SUBJECTIVE:", "OBJECTIVE:", "ASSESSMENT:", "PLAN:"
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return {}, False
+
+    # 1) strict
+    secs, ok = parse_headers(raw)
+    if ok:
+        return secs, True
+
+    headers = ["SUBJECTIVE", "OBJECTIVE", "ASSESSMENT", "PLAN"]
+
+    # 2) insert newlines before inline headers
+    fixed = raw
+    for h in headers:
+        fixed = re.sub(rf"(?i)\s+({h}\s*:)", r"\n\1", fixed)
+    secs2, ok2 = parse_headers(fixed)
+    if ok2:
+        return secs2, True
+
+    # 3) shorthand S/O/A/P
+    fixed2 = raw
+    fixed2 = re.sub(r"(?i)\bS\s*:\s*", "SUBJECTIVE: ", fixed2)
+    fixed2 = re.sub(r"(?i)\bO\s*:\s*", "OBJECTIVE: ", fixed2)
+    fixed2 = re.sub(r"(?i)\bA\s*:\s*", "ASSESSMENT: ", fixed2)
+    fixed2 = re.sub(r"(?i)\bP\s*:\s*", "PLAN: ", fixed2)
+
+    for h in headers:
+        fixed2 = re.sub(rf"(?i)\s+({h}\s*:)", r"\n\1", fixed2)
+
+    secs3, ok3 = parse_headers(fixed2)
+    if ok3:
+        return secs3, True
+
+    return {}, False
 
 
 
 def plan_bullets_ok(plan: str) -> bool:
-    lines = [l.strip() for l in (plan or "").splitlines() if l.strip()]
+    plan = (plan or "").strip()
+    if not plan:
+        return False
+
+    # If bullets are inline like "- a - b - c" on one line, normalize to one per line.
+    # Only do this if there aren't already multiple lines.
+    if "\n" not in plan and " - " in plan:
+        plan = plan.replace(" - ", "\n- ")
+        # also handle if the string starts with "- " already
+        if not plan.lstrip().startswith("- "):
+            plan = "- " + plan
+
+    lines = [l.strip() for l in plan.splitlines() if l.strip()]
     if not lines:
         return False
 
-    # Accept:
-    # - bullet lines
-    # * bullet lines
-    # or plain lines (like "Obtain EKG immediately.")
-    bullet_like = sum(1 for l in lines if l.startswith("- ") or l.startswith("* "))
-    if bullet_like >= max(1, len(lines) // 2):
-        return True
+    # Accept: "- ..." per line
+    return all(l.startswith("- ") and len(l) > 2 for l in lines)
 
-    # Otherwise require at least 3 short plan actions as plain lines
-    # (avoid a single paragraph)
-    if len(lines) >= 3 and all(len(l) <= 140 for l in lines):
-        return True
-
-    return False
 
 
 def count_string_coverage(text: str, items: List[str]) -> float:
@@ -310,10 +363,16 @@ def evaluate_soap(
         ref = (soap_ref or {}).get(key, "")
         if pred.strip():
             nonempty += 1
+        if key == "subjective":
+            print("DEBUG evaluate_soap soap_ref keys =", sorted(list((soap_ref or {}).keys())))
+            print("DEBUG evaluate_soap ref_len(subjective) =", len((ref or "").strip()),
+                "pred_len =", len((pred or "").strip()))
+
+
 
         rl = rouge_l_f1(pred, ref)
         tf1 = token_f1(pred, ref)
-        cr = concept_recall(ref, pred)
+        cr = concept_recall(pred, ref)
         out[f"rougeL_f1_{key}"] = rl
         out[f"token_f1_{key}"] = tf1
         out[f"concept_recall_{key}"] = cr

@@ -72,62 +72,49 @@ class SynthesisAgent:
     # Prompting
     # ----------------------------
     def _build_prompt(self, case_text: str) -> str:
-        # NOTE: We intentionally do NOT include "SUBJECTIVE: ..." placeholders.
-        # We tell the model to output headers only, with real content.
         return f"""You are a clinical documentation assistant.
-Write a SOAP note ONLY using the information provided below.
-If something is missing, write "UNKNOWN" (do NOT invent details).
 
-CASE:
-Presenting complaint: 
-HPI: 
-Vitals: 
-Meds: 
-Allergies: 
+Task:
+Write a SOAP note using ONLY the information in the CASE. If a detail is missing, write "UNKNOWN".
+Do NOT invent facts.
 
-OUTPUT FORMAT (exactly):
-SUBJECTIVE: <1-3 sentences>
-OBJECTIVE: <1-3 sentences>
-ASSESSMENT: <1-3 sentences>
-PLAN: <1-4 bullet points prefixed with "- ">
+CRITICAL FORMAT REQUIREMENTS (must follow exactly):
+- Use plain text only. NO markdown, NO bold, NO asterisks.
+- Use these headers EXACTLY (all caps, with colon):
+SUBJECTIVE:
+OBJECTIVE:
+ASSESSMENT:
+PLAN:
+- PLAN must be 1–4 bullet lines, each starting with "- " (dash + space). No other bullet symbols.
 
-Rules:
-- Do NOT use "..." or placeholders.
-- Do NOT invent facts not in the case. If something is missing, state what you need.
-- Keep each section to at most {self.cfg.max_sentences_per_section} sentences.
-- No meta commentary, no disclaimers.
+Style constraints:
+- SUBJECTIVE/OBJECTIVE/ASSESSMENT: 1–3 sentences each.
+- PLAN: 1–4 bullets.
+- No meta commentary. No disclaimers.
 
 CASE:
 {case_text}
 """
 
     def _build_retry_prompt(self, case_text: str, bad_output: str) -> str:
-        # A stricter retry that explicitly calls out what went wrong.
-        return f"""You previously returned an invalid SOAP note (it contained placeholders like "..." or missing content).
-Fix it.
+        return f"""Your previous output was INVALID because it did not match the required format.
+Rewrite it and follow the format rules EXACTLY.
 
-CASE:
-Presenting complaint: 
-HPI: 
-Vitals: 
-Meds: 
-Allergies: 
+CRITICAL FORMAT REQUIREMENTS:
+- Plain text only. NO markdown, NO bold, NO asterisks.
+- Headers EXACTLY:
+SUBJECTIVE:
+OBJECTIVE:
+ASSESSMENT:
+PLAN:
+- PLAN bullets must be "- " (dash + space).
 
-OUTPUT FORMAT (exactly):
-SUBJECTIVE: <1-3 sentences>
-OBJECTIVE: <1-3 sentences>
-ASSESSMENT: <1-3 sentences>
-PLAN: <1-4 bullet points prefixed with "- ">
-
-Hard rules:
-- No placeholders (no "...", no "TBD", no "N/A").
-- Use only information from the case. If uncertain, write "UNKNOWN" (do not ask questions).
-- Each section <= {self.cfg.max_sentences_per_section} sentences.
+If something is missing, write "UNKNOWN". Do NOT invent facts.
 
 CASE:
 {case_text}
 
-INVALID OUTPUT (for reference; do not repeat):
+INVALID OUTPUT (do not repeat):
 {bad_output}
 """
 

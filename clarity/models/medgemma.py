@@ -116,8 +116,6 @@ class MedGemmaModel:
 
         text = self._build_prompt(prompt)
 
-        # IMPORTANT: for chat_text we used add_special_tokens=False when encoding
-        # to avoid duplicating special tokens (matches your earlier debug)
         enc = self.tokenizer(
             text,
             return_tensors="pt",
@@ -133,13 +131,22 @@ class MedGemmaModel:
         prompt_len = input_ids.shape[-1]
         max_length = prompt_len + int(max_new_tokens)
 
-        # Forbid PAD token generation explicitly (prevents pad-only streams)
+        # Prevent PAD token generation explicitly
         bad_words = [[pad_id]] if pad_id is not None else None
 
         # Min-new-tokens: block EOS until enough tokens generated
         lp = LogitsProcessorList()
         if min_new_tokens and min_new_tokens > 0:
             lp.append(self._MinNewTokens(min_new_tokens, eos_list, start_len=prompt_len))
+
+        # --- NEW: repetition controls to prevent runaway bullet loops ---
+        # These are conservative and help a lot on list-style outputs.
+        repetition_penalty = 1.15
+        no_repeat_ngram_size = 4
+
+        # If not sampling, transformers expects temperature/top_p to be ignored.
+        gen_temperature = float(temperature) if do_sample else None
+        gen_top_p = float(top_p) if do_sample else None
 
         if debug:
             gc = getattr(self.model, "generation_config", None)
@@ -149,8 +156,9 @@ class MedGemmaModel:
             print("pad_id:", pad_id, "eos_ids:", eos_list)
             print("prompt_len:", prompt_len, "max_length:", max_length)
             print("gen_config.max_length:", getattr(gc, "max_length", None))
+            print("do_sample:", do_sample, "temperature:", gen_temperature, "top_p:", gen_top_p)
+            print("repetition_penalty:", repetition_penalty, "no_repeat_ngram_size:", no_repeat_ngram_size)
 
-            # forward check
             with torch.inference_mode(), torch.autocast(device_type="cuda", enabled=False):
                 out = self.model(input_ids=input_ids, attention_mask=attention_mask)
             finite = torch.isfinite(out.logits).all().item()
@@ -161,19 +169,24 @@ class MedGemmaModel:
             out_ids = self.model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                max_length=max_length,           # hard clamp (avoids tiny max_length in generation_config)
+                max_length=max_length,  # hard clamp (avoids tiny max_length in generation_config)
                 do_sample=do_sample,
-                temperature=temperature if do_sample else None,
-                top_p=top_p if do_sample else None,
+                temperature=gen_temperature,
+                top_p=gen_top_p,
                 eos_token_id=eos_list,
                 pad_token_id=(self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else pad_id),
                 bad_words_ids=bad_words,
                 logits_processor=lp if len(lp) else None,
-            )
+
+                # --- NEW knobs ---
+                repetition_penalty=repetition_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
+            )   
 
         new_ids = out_ids[0, prompt_len:]
         text_out = self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
         return text_out
+
 
 
 
