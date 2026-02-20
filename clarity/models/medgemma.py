@@ -142,8 +142,8 @@ class MedGemmaModel:
 
         # --- NEW: repetition controls to prevent runaway bullet loops ---
         # These are conservative and help a lot on list-style outputs.
-        repetition_penalty = 1.15
-        no_repeat_ngram_size = 4
+        repetition_penalty = float(gen_kwargs.pop("repetition_penalty", 1.15))
+        no_repeat_ngram_size = int(gen_kwargs.pop("no_repeat_ngram_size", 4))
 
         # If not sampling, transformers expects temperature/top_p to be ignored.
         gen_temperature = float(temperature) if do_sample else None
