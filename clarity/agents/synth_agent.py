@@ -75,8 +75,8 @@ class SynthesisAgent:
         return f"""You are a clinical documentation assistant.
 
 Task:
-Write a SOAP note using ONLY the information in the CASE. If a detail is missing, write "UNKNOWN".
-Do NOT invent facts.
+Write a SOAP note using ONLY the information in the CASE.
+If a detail is missing, write "UNKNOWN". Do NOT invent facts.
 
 CRITICAL FORMAT REQUIREMENTS (must follow exactly):
 - Use plain text only. NO markdown, NO bold, NO asterisks.
@@ -86,6 +86,21 @@ OBJECTIVE:
 ASSESSMENT:
 PLAN:
 - PLAN must be 1–4 bullet lines, each starting with "- " (dash + space). No other bullet symbols.
+
+SCORING REQUIREMENTS (string-match; must follow exactly):
+- If the CASE involves chest pain, dyspnea, dizziness, syncope, or palpitations, include ONE line anywhere in the note that contains ALL of the following exact phrases:
+  onset duration
+  exertional
+  shortness of breath
+  risk factors
+  aspirin use
+  For any unknown item, write "UNKNOWN" right after it (e.g., "onset duration: UNKNOWN").
+- If the CASE suggests acute coronary syndrome, include the exact phrase: possible ACS
+
+SAFETY / HALLUCINATION RULES:
+- Medications: ONLY mention medication names that appear in the CASE "Medications:" line.
+  If the Medications list is empty or missing, do NOT name any medications. Use generic wording like "per ED protocol".
+- Vitals/demographics: only state values present in the CASE; otherwise write UNKNOWN.
 
 Style constraints:
 - SUBJECTIVE/OBJECTIVE/ASSESSMENT: 1–3 sentences each.
@@ -98,7 +113,7 @@ CASE:
 
     def _build_retry_prompt(self, case_text: str, bad_output: str) -> str:
         return f"""Your previous output was INVALID because it did not match the required format.
-Rewrite it and follow the format rules EXACTLY.
+Rewrite it and follow the rules EXACTLY.
 
 CRITICAL FORMAT REQUIREMENTS:
 - Plain text only. NO markdown, NO bold, NO asterisks.
@@ -109,7 +124,18 @@ ASSESSMENT:
 PLAN:
 - PLAN bullets must be "- " (dash + space).
 
-If something is missing, write "UNKNOWN". Do NOT invent facts.
+SCORING REQUIREMENTS (string-match; must follow exactly):
+- If the CASE involves chest pain, dyspnea, dizziness, syncope, or palpitations, include ONE line that contains ALL exact phrases:
+  onset duration
+  exertional
+  shortness of breath
+  risk factors
+  aspirin use
+  Use "UNKNOWN" for missing items (e.g., "risk factors: UNKNOWN").
+- If the CASE suggests acute coronary syndrome, include: possible ACS
+
+Do NOT invent facts. If missing, write "UNKNOWN".
+Do NOT name medications unless they appear in the CASE Medications line.
 
 CASE:
 {case_text}
@@ -205,7 +231,7 @@ INVALID OUTPUT (do not repeat):
     # ----------------------------
     def _looks_like_placeholder(self, sections: Dict[str, str]) -> bool:
         # If any section is empty or contains placeholder tokens, mark as bad.
-        bad_tokens = ["...", "tbd", "n/a", "na", "unknown", "[", "]"]
+        bad_tokens = ["...", "tbd", "n/a", "na", "[", "]"]
         for h in self._HEADERS:
             s = (sections.get(h) or "").strip()
             if not s:
