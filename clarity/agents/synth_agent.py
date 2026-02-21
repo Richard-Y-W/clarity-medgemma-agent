@@ -91,6 +91,12 @@ ASSESSMENT:
 PLAN:
 PLAN must be 1–4 lines, each starting with "- " (dash + space). No other bullet styles.
 
+Coverage requirements (for scoring):
+- SUBJECTIVE must include every item from "Required questions" as: "<item>: <value or UNKNOWN>" (exact wording).
+- ASSESSMENT must mention every item from "Red flags" verbatim. If not supported by CASE, write "<item>: UNKNOWN" or hedge (possible/concern for).
+- Prefer copying short exact phrases from the CASE (3–8 words) rather than paraphrasing.
+- In each section, include at least 2 exact phrases from the CASE.
+
 LEXICAL ANCHORING RULE:
 - Reuse key clinical phrases verbatim from the CASE whenever possible.
 - Prefer exact wording for diagnoses, symptoms, and vitals.

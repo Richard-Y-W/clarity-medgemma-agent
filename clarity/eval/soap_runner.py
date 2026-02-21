@@ -63,7 +63,9 @@ def _normalize_pred_for_eval(raw: str) -> str:
     # Convert common bullets to "- "
     s = re.sub(r"(?m)^\s*[\*\u2022]\s+", "- ", s)
     s = re.sub(r"(?m)^\s*\d+\.\s+", "- ", s)
-
+    m = re.search(r"(?im)^\s*SUBJECTIVE\s*:", s)
+    if m:
+        s = s[m.start():]
     # --- Clamp PLAN to 1–4 valid "- " bullet lines ---
     m = re.search(r"(?is)\bPLAN:\s*(.*)$", s)
     if m:
@@ -156,7 +158,13 @@ def run_soap_eval(
             )
 
             # Build prompt
-            case_text = synth._format_case(state)
+            rq = gt.get("required_questions", [])
+            rf = gt.get("red_flags", [])
+
+            if rq:
+                case_text += "\nRequired questions (answer with value or UNKNOWN, keep labels verbatim): " + "; ".join(rq)
+            if rf:
+                case_text += "\nRed flags (mention/assess each, hedge if uncertain): " + "; ".join(rf)
 
 
             if hasattr(synth, "_build_prompt"):
