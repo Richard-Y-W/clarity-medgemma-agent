@@ -132,20 +132,23 @@ class MedGemmaModel:
         prompt_len = input_ids.shape[-1]
         max_length = prompt_len + int(max_new_tokens)
 
-        # Prevent PAD token generation explicitly
+    # Prevent PAD token generation explicitly
         bad_words = [[pad_id]] if pad_id is not None else None
 
-        # Min-new-tokens: block EOS until enough tokens generated
+    # Min-new-tokens: block EOS until enough tokens generated
         lp = LogitsProcessorList()
         if min_new_tokens and min_new_tokens > 0:
             lp.append(self._MinNewTokens(min_new_tokens, eos_list, start_len=prompt_len))
 
-        # --- NEW: repetition controls to prevent runaway bullet loops ---
-        # These are conservative and help a lot on list-style outputs.
+    # Repetition controls (defaults, caller can override via gen_kwargs)
         repetition_penalty = float(gen_kwargs.pop("repetition_penalty", 1.15))
         no_repeat_ngram_size = int(gen_kwargs.pop("no_repeat_ngram_size", 4))
 
-        # If not sampling, transformers expects temperature/top_p to be ignored.
+    # Deterministic search settings (caller can override via gen_kwargs too if desired)
+        num_beams = int(gen_kwargs.pop("num_beams", 4 if not do_sample else 1))
+        early_stopping = bool(gen_kwargs.pop("early_stopping", (True if not do_sample else False)))
+
+    # Only pass sampling params when sampling
         gen_temperature = float(temperature) if do_sample else None
         gen_top_p = float(top_p) if do_sample else None
 
@@ -158,6 +161,7 @@ class MedGemmaModel:
             print("prompt_len:", prompt_len, "max_length:", max_length)
             print("gen_config.max_length:", getattr(gc, "max_length", None))
             print("do_sample:", do_sample, "temperature:", gen_temperature, "top_p:", gen_top_p)
+            print("num_beams:", num_beams, "early_stopping:", early_stopping)
             print("repetition_penalty:", repetition_penalty, "no_repeat_ngram_size:", no_repeat_ngram_size)
 
             with torch.inference_mode(), torch.autocast(device_type="cuda", enabled=False):
@@ -166,24 +170,32 @@ class MedGemmaModel:
             nan_count = torch.isnan(out.logits).sum().item()
             print("forward logits finite?", finite, "nan_count", nan_count)
 
-        with torch.inference_mode(), torch.autocast(device_type="cuda", enabled=False):
-            out_ids = self.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_length=max_length,  # hard clamp (avoids tiny max_length in generation_config)
-                do_sample=do_sample,
-                temperature=gen_temperature,
-                top_p=gen_top_p,
-                eos_token_id=eos_list,
-                pad_token_id=(self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else pad_id),
-                bad_words_ids=bad_words,
-                logits_processor=lp if len(lp) else None,
+    # Build kwargs once to avoid accidental duplicates
+        hf_kwargs: Dict[str, Any] = dict(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=max_length,  # hard clamp
+            do_sample=do_sample,
+            eos_token_id=eos_list,
+            pad_token_id=(self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else pad_id),
+            bad_words_ids=bad_words,
+            logits_processor=lp if len(lp) else None,
+            repetition_penalty=repetition_penalty,
+            no_repeat_ngram_size=no_repeat_ngram_size,
+            num_beams=num_beams,
+            early_stopping=early_stopping,
+        )
 
-                # --- NEW knobs ---
-                repetition_penalty=repetition_penalty,
-                no_repeat_ngram_size=no_repeat_ngram_size,
-                **gen_kwargs,
-            )   
+    # Add sampling params only when relevant
+        if do_sample:
+            hf_kwargs["temperature"] = gen_temperature
+            hf_kwargs["top_p"] = gen_top_p
+
+    # Let any remaining caller kwargs pass through (after pops above)
+        hf_kwargs.update({k: v for k, v in gen_kwargs.items() if v is not None})
+
+        with torch.inference_mode(), torch.autocast(device_type="cuda", enabled=False):
+            out_ids = self.model.generate(**hf_kwargs)
 
         new_ids = out_ids[0, prompt_len:]
         text_out = self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
