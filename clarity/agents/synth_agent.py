@@ -74,10 +74,11 @@ class SynthesisAgent:
     def _build_prompt(self, case_text: str) -> str:
         return f"""You are a clinical documentation assistant.
 
-Write a SOAP note using ONLY the information in the CASE.
-Explicitly restate key clinical details from the CASE (symptoms, vitals, risk factors, durations) in the appropriate sections.
+Rewrite the CASE into a SOAP note by directly organizing and reusing the exact clinical phrases from the CASE.
+Do not paraphrase unless necessary.
+Preserve wording of symptoms, vitals, durations, and diagnoses when possible.
 If a detail is missing, write "UNKNOWN".
-Do NOT summarize away specific findings.
+Do NOT invent facts.
 
 FORMAT (must follow exactly):
 SUBJECTIVE:
