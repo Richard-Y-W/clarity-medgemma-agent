@@ -158,13 +158,18 @@ def run_soap_eval(
             )
 
             # Build prompt
-            rq = gt.get("required_questions", [])
-            rf = gt.get("red_flags", [])
+
+            case_text = synth._format_case(state)
+
+            gt = c.get("ground_truth") or {}
+            rq = gt.get("required_questions", []) or []
+            rf = gt.get("red_flags", []) or []
 
             if rq:
                 case_text += "\nRequired questions (answer with value or UNKNOWN, keep labels verbatim): " + "; ".join(rq)
+
             if rf:
-                case_text += "\nRed flags (mention/assess each, hedge if uncertain): " + "; ".join(rf)
+                case_text += "\nRed flags (do NOT add new ones; mention only if supported by CASE): " + "; ".join(rf)
 
 
             if hasattr(synth, "_build_prompt"):
