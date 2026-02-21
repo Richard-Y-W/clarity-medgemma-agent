@@ -170,7 +170,7 @@ def run_soap_eval(
             raw = model.generate(
                 prompt,
                 max_new_tokens=decoding.max_new_tokens,
-                min_new_tokens=decoding.min_new_tokens,
+                min_new_tokens=80,
                 do_sample=decoding.do_sample,
                 temperature=decoding.temperature,
                 top_p=decoding.top_p,
