@@ -75,7 +75,9 @@ class SynthesisAgent:
         return f"""You are a clinical documentation assistant.
 
 Write a SOAP note using ONLY the information in the CASE.
-If a detail is missing, write "UNKNOWN". Do NOT invent facts.
+Explicitly restate key clinical details from the CASE (symptoms, vitals, risk factors, durations) in the appropriate sections.
+If a detail is missing, write "UNKNOWN".
+Do NOT summarize away specific findings.
 
 FORMAT (must follow exactly):
 SUBJECTIVE:
