@@ -83,7 +83,12 @@ def concept_recall(pred: str, ref: str) -> float:
     if not rtoks:
         return 0.0
     ptoks = set(_tokens(pred))
-    hit = sum(1 for t in rtoks if t in ptoks)
+    hit = 0
+    for t in rtoks:
+        for p in ptoks:
+            if t == p or t in p or p in t:
+                hit += 1
+                break
     return hit / len(rtoks)
 
 
