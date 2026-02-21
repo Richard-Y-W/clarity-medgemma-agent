@@ -41,9 +41,11 @@ def _flatten_soap_reference(soap_ref: Dict[str, Any]) -> str:
 import re
 
 def _normalize_pred_for_eval(raw: str) -> str:
+    import re
+
     s = (raw or "").strip()
 
-    # Strip markdown bold markers globally (safe for this task)
+    # Strip markdown bold markers globally
     s = s.replace("**", "")
 
     # Normalize header lines (any capitalization) to exact expected tokens
@@ -52,9 +54,58 @@ def _normalize_pred_for_eval(raw: str) -> str:
     s = re.sub(r"(?im)^\s*assessment\s*:\s*", "ASSESSMENT: ", s)
     s = re.sub(r"(?im)^\s*plan\s*:\s*", "PLAN: ", s)
 
+    # Remove fenced code blocks (models sometimes dump ```json ...```)
+    s = re.sub(r"(?s)```.*?```", "", s).strip()
+
+    # Normalize unicode dash bullets (– — −) to "- "
+    s = re.sub(r"(?m)^\s*[\u2013\u2014\u2212]\s+", "- ", s)
+
     # Convert common bullets to "- "
-    s = re.sub(r"(?m)^\s*[\*\u2022]\s+", "- ", s)   # "* " or "• "
-    s = re.sub(r"(?m)^\s*\d+\.\s+", "- ", s)        # "1. " -> "- "
+    s = re.sub(r"(?m)^\s*[\*\u2022]\s+", "- ", s)
+    s = re.sub(r"(?m)^\s*\d+\.\s+", "- ", s)
+
+    # --- Clamp PLAN to 1–4 valid "- " bullet lines ---
+    m = re.search(r"(?is)\bPLAN:\s*(.*)$", s)
+    if m:
+        plan = m.group(1).strip()
+
+        lines = [ln.strip() for ln in plan.splitlines() if ln.strip()]
+        norm = []
+
+        for ln in lines:
+            # Stop if model starts emitting new header
+            if re.match(r"^(SUBJECTIVE|OBJECTIVE|ASSESSMENT|PLAN)\s*:", ln, flags=re.I):
+                break
+
+            # Normalize bullets again defensively
+            ln = re.sub(r"^\s*[\*\u2022]\s+", "- ", ln)
+            ln = re.sub(r"^\s*\d+\.\s+", "- ", ln)
+            ln = re.sub(r"^\s*[\u2013\u2014\u2212]\s+", "- ", ln)
+
+            # Remove junk like "- - - -"
+            if re.fullmatch(r"[-\s]+", ln):
+                continue
+
+            if not ln.startswith("- "):
+                ln = "- " + ln
+
+            # Ensure content exists beyond "- "
+            if len(ln.strip()) > 2:
+                norm.append(ln)
+
+        # Limit to 4 bullets
+        norm = norm[:4]
+
+        # Ensure PLAN is never empty
+        if not norm:
+            norm = ["- UNKNOWN"]
+
+        # Rewrite PLAN section cleanly
+        s = re.sub(
+            r"(?is)\bPLAN:\s*.*$",
+            "PLAN:\n" + "\n".join(norm),
+            s,
+        ).strip()
 
     return s.strip()
 
@@ -120,8 +171,9 @@ def run_soap_eval(
                 prompt,
                 max_new_tokens=decoding.max_new_tokens,
                 min_new_tokens=decoding.min_new_tokens,
-                do_sample=False,
-                repetition_penalty=1.05,
+                do_sample=decoding.do_sample,
+                temperature=decoding.temperature,
+                top_p=decoding.top_p,
             )
 
             raw = _normalize_pred_for_eval(raw)
