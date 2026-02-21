@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from clarity.schemas import PatientState, SOAPNote
 from clarity.models.medgemma import MedGemmaModel
+from clarity.agents.extract_agent import ExtractAgent, ExtractConfig
 
 
 @dataclass(frozen=True)
@@ -43,23 +44,26 @@ class SynthesisAgent:
 
     def generate_soap(self, state: PatientState) -> SOAPNote:
         case_text = self._format_case(state)
-        prompt = self._build_prompt(case_text)
 
-        raw = self.model.generate(prompt, max_new_tokens=self.cfg.max_new_tokens)
+        extractor = ExtractAgent(self.model, ExtractConfig(max_new_tokens=256))
+        ex = extractor.extract(case_text)
 
-        # Normalize + parse
+        # Deterministic render
+        subjective = " ".join(ex["subjective"]).strip()
+        objective  = " ".join(ex["objective"]).strip()
+        assessment = " ".join(ex["assessment"]).strip()
+
+        plan_lines = [f"- {p}" if not p.startswith("- ") else p for p in ex["plan"]]
+        plan_lines = plan_lines[:4]
+
+        raw = (
+            f"SUBJECTIVE: {subjective}\n"
+            f"OBJECTIVE: {objective}\n"
+            f"ASSESSMENT: {assessment}\n"
+            f"PLAN:\n" + "\n".join(plan_lines)
+        )
         cleaned = self._normalize_output(raw)
         sections = self._parse_sections(cleaned)
-
-        # Guardrail: if model returned placeholders, try one strict retry
-        if self.cfg.disallow_placeholders and self._looks_like_placeholder(sections):
-            retry_prompt = self._build_retry_prompt(case_text, cleaned)
-            raw2 = self.model.generate(retry_prompt, max_new_tokens=self.cfg.max_new_tokens)
-            cleaned2 = self._normalize_output(raw2)
-            sections2 = self._parse_sections(cleaned2)
-            # Use the better one (fewer empty / placeholder-like sections)
-            if self._quality_score(sections2) >= self._quality_score(sections):
-                sections = sections2
 
         return SOAPNote(
             subjective=sections.get("SUBJECTIVE:", "").strip(),
